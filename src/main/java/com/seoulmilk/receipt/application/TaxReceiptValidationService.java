@@ -40,34 +40,34 @@ public class TaxReceiptValidationService {
 
     @KafkaListener(topics = "${kafka.topic}", groupId = "${kafka.group-id}", concurrency = "3")
     public void listen(List<OcrValidationRequest> ocrValidationRequestList) {
+        if (ocrValidationRequestList == null || ocrValidationRequestList.isEmpty()) return;
+
         long startTime = System.currentTimeMillis();
-        log.info("이벤트 결과 - {} ", ocrValidationRequestList);
+        log.info("[Consumer] Kafka 이벤트 수신 완료: 총 {} 장의 OCR 파일 도착", ocrValidationRequestList.size());
 
         Long pk = ocrValidationRequestList.getFirst().empPk();
-        log.info("현재 사용자 pk - {}", pk);
+        log.info("[Consumer] 현재 처리 중인 사용자 PK - {}", pk);
 
-//        Emp emp = getEmployee(pk);
-//        log.info("현재 사용자 - {}", emp.getName());
-//
-//        String uuid = UUID.randomUUID().toString();
-//        List<TaxReceiptValidationRequest> taxReceiptValidationRequests = new ArrayList<>();
-//
-//        for (OcrValidationRequest ocrValidationRequest : ocrValidationRequestList) {
-//            TaxReceiptValidationRequest taxReceiptValidationRequest =
-//                    createTaxReceiptValidationRequest(emp, ocrValidationRequest, uuid);
-//            taxReceiptValidationRequests.add(taxReceiptValidationRequest);
-//        }
-//
-//        AdditionalAuthResponse additionalAuthResponse = requestAdditionalAuthentication(taxReceiptValidationRequests);
-//
-//        receiptCacheService.handleTransactionId(emp.getId(), additionalAuthResponse.jti());
-//        log.info("저장된 트랜잭션 id key - {}, Value - {}",
-//                "transactionId:" + emp.getId(), redisTemplate.opsForValue().get("transactionId:" + emp.getId()));
-//
-//        receiptCacheService.hadleRequestData(emp.getId(), ocrValidationRequestList);
-//        log.info("저장된 데이터 - {}", redisTemplate.opsForValue().get("requestData:" + emp.getId()));
-//        long endTime = System.currentTimeMillis();
-//        log.info("카프카를 통한 국세청 검증 로직 실행시간 측정 - {}ms", endTime - startTime);
+        log.info("[Consumer] 국세청 검증 서버 연동 중...");
+        
+        // 국세청 검증 지연시간(1~3초) 시뮬레이션
+        simulateDelay(1000, 3000);
+        
+        // 여기에 원래 들어갔어야 할 Redis 적재 및 DB 저장 로직이 성공적으로 완료되었다고 가정
+        String transactionId = UUID.randomUUID().toString();
+        log.info("[Consumer] 가상 검증 성공! 할당된 Transaction ID: {}", transactionId);
+        
+        long endTime = System.currentTimeMillis();
+        log.info("[Consumer] 비동기 데이터 처리 최종 완료. 소요시간: {}ms", (endTime - startTime));
+    }
+
+    private void simulateDelay(int minMs, int maxMs) {
+        try {
+            int delay = new java.util.Random().nextInt(maxMs - minMs + 1) + minMs;
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 //    private AdditionalAuthResponse requestAdditionalAuthentication(List<TaxReceiptValidationRequest> taxReceiptValidationRequests) {
 //        return taxReceiptValidationProvider.requestAdditionalAuthentication(taxReceiptValidationRequests);
