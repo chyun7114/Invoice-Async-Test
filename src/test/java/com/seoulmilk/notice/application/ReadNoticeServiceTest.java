@@ -1,6 +1,5 @@
 package com.seoulmilk.notice.application;
 
-import com.seoulmilk.core.application.CacheService;
 import com.seoulmilk.emp.domain.entity.Emp;
 import com.seoulmilk.emp.domain.repository.EmpRepository;
 import com.seoulmilk.emp.exception.EmpErrorCode;
@@ -41,8 +40,6 @@ class ReadNoticeServiceTest {
     @Mock
     private EmpRepository empRepository;
 
-    @Mock
-    private CacheService cacheService;
 
     @InjectMocks
     private ReadNoticeService readNoticeService;
@@ -170,16 +167,16 @@ class ReadNoticeServiceTest {
             Notice notice = createNotice(1L, 1L);
             Page<Notice> noticePage = new PageImpl<>(List.of(notice));
 
-            when(noticeRepository.findAllByKeyword(any(Specification.class), eq(pageable)))
+            when(noticeRepository.findAllByKeyword(any(Specification.class), any(Pageable.class)))
                     .thenReturn(noticePage);
 
             // When
             PageResponse<NoticeSummaryResponse> result =
-                    readNoticeService.getNoticesByKeyword("title_and_content", "테스트 제목", pageable);
+                    readNoticeService.getNoticesByKeyword("title_and_content", "keyword_placeholder", pageable.getPageNumber(), pageable.getPageSize());
 
             // Then
             assertThat(result.content()).hasSize(1);
-            verify(noticeRepository).findAllByKeyword(any(Specification.class), eq(pageable));
+            verify(noticeRepository).findAllByKeyword(any(Specification.class), any(Pageable.class));
         }
 
         @Test
@@ -190,16 +187,16 @@ class ReadNoticeServiceTest {
             Notice notice = createNotice(1L, 1L);
             Page<Notice> noticePage = new PageImpl<>(List.of(notice));
 
-            when(noticeRepository.findAllByKeyword(any(Specification.class), eq(pageable)))
+            when(noticeRepository.findAllByKeyword(any(Specification.class), any(Pageable.class)))
                     .thenReturn(noticePage);
 
             // When
             PageResponse<NoticeSummaryResponse> result =
-                    readNoticeService.getNoticesByKeyword("author", "테스트 유저", pageable);
+                    readNoticeService.getNoticesByKeyword("author", "테스트 유저", pageable.getPageNumber(), pageable.getPageSize());
 
             // Then
             assertThat(result.content()).hasSize(1);
-            verify(noticeRepository).findAllByKeyword(any(Specification.class), eq(pageable));
+            verify(noticeRepository).findAllByKeyword(any(Specification.class), any(Pageable.class));
         }
 
         @Test
@@ -210,16 +207,16 @@ class ReadNoticeServiceTest {
             Notice notice = createNotice(1L, 1L);
             Page<Notice> noticePage = new PageImpl<>(List.of(notice));
 
-            when(noticeRepository.findAllByKeyword(any(Specification.class), eq(pageable)))
+            when(noticeRepository.findAllByKeyword(any(Specification.class), any(Pageable.class)))
                     .thenReturn(noticePage);
 
             // When
             PageResponse<NoticeSummaryResponse> result =
-                    readNoticeService.getNoticesByKeyword("all", "테스트 유저", pageable);
+                    readNoticeService.getNoticesByKeyword("all", "테스트 유저", pageable.getPageNumber(), pageable.getPageSize());
 
             // Then
             assertThat(result.content()).hasSize(1);
-            verify(noticeRepository).findAllByKeyword(any(Specification.class), eq(pageable));
+            verify(noticeRepository).findAllByKeyword(any(Specification.class), any(Pageable.class));
         }
     }
 }

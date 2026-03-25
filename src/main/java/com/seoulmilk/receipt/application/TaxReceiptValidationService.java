@@ -42,8 +42,21 @@ public class TaxReceiptValidationService {
     public void listen(List<OcrValidationRequest> ocrValidationRequestList) {
         if (ocrValidationRequestList == null || ocrValidationRequestList.isEmpty()) return;
 
+        // 1. Idempotency (멱등성 방어) 필터링
+        // Kafka 의 재전송(At-least-once)으로 인해 완벽히 동일한 이벤트가 2~3번 들어올 위험이 있습니다.
+        // 첫 번째 파일의 고유 URL(내부에 UUID 존재)을 추출해 고유 식별 키로 사용합니다.
+        String idempotencyKey = "idempotency:ocr_event:" + ocrValidationRequestList.getFirst().fileUrl();
+        
+        // setIfAbsent: 키가 존재하지 않으면 Redis에 저장(true 반환), 이미 존재하면 실패(false 반환)
+        Boolean isFirstReceived = redisTemplate.opsForValue().setIfAbsent(idempotencyKey, "DONE", java.time.Duration.ofMinutes(10));
+        
+        if (Boolean.FALSE.equals(isFirstReceived)) {
+            log.warn("[Consumer-Idempotency] 🚨 이미 처리 중이거나 완료된 중복 이벤트입니다! 안전하게 무시합니다. Key: {}", idempotencyKey);
+            return;
+        }
+
         long startTime = System.currentTimeMillis();
-        log.info("[Consumer] Kafka 이벤트 수신 완료: 총 {} 장의 OCR 파일 도착", ocrValidationRequestList.size());
+        log.info("[Consumer] Kafka 이벤트 수신 및 중복 체크 통과: 총 {} 장의 OCR 파일", ocrValidationRequestList.size());
 
         Long pk = ocrValidationRequestList.getFirst().empPk();
         log.info("[Consumer] 현재 처리 중인 사용자 PK - {}", pk);
