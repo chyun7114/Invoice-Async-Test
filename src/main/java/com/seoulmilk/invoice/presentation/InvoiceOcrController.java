@@ -2,13 +2,10 @@ package com.seoulmilk.invoice.presentation;
 
 import com.seoulmilk.core.infrastructure.security.CustomUserDetails;
 import com.seoulmilk.core.presentation.RestResponse;
-import com.seoulmilk.invoice.application.OcrEventPublisher;
-import com.seoulmilk.invoice.application.OpenFeignService;
+import com.seoulmilk.invoice.application.usecase.InvoiceProcessUseCase;
 import com.seoulmilk.invoice.presentation.swagger.InvoiceOcrSwagger;
-import com.seoulmilk.receipt.dto.request.OcrValidationRequest;
-import feign.FeignException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,43 +14,45 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 @RestController
 @Log4j2
-@RequiredArgsConstructor
 @RequestMapping("/v1/invoice")
 public class InvoiceOcrController implements InvoiceOcrSwagger {
-    private final OpenFeignService openFeignService;
-    private final OcrEventPublisher ocrEventPublisher;
+
+    private final InvoiceProcessUseCase asyncInvoiceProcessService;
+    private final InvoiceProcessUseCase syncInvoiceProcessService;
+
+    public InvoiceOcrController(
+            @Qualifier("asyncInvoiceProcessService") InvoiceProcessUseCase asyncInvoiceProcessService,
+            @Qualifier("syncInvoiceProcessService") InvoiceProcessUseCase syncInvoiceProcessService) {
+        this.asyncInvoiceProcessService = asyncInvoiceProcessService;
+        this.syncInvoiceProcessService = syncInvoiceProcessService;
+    }
 
     @PostMapping
     public ResponseEntity<RestResponse<Boolean>> uploadMultipleFiles(
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
-            @RequestPart("files") List<MultipartFile> files) {
+            @RequestPart(value = "files", required = false) List<MultipartFile> files) {
 
-        List<OcrValidationRequest> results = files.stream()
-                .map(file -> {
-                    try {
-                        return openFeignService.processImg(customUserDetails.getId(), file);
-                    } catch (FeignException e) {
-                        log.error("OCR 처리 실패: {}", e.contentUTF8());
-                        return null;
-                    }
-                })
-                .toList();
+        if (files == null) {
+            files = new ArrayList<>();
+        }
+        Boolean result = asyncInvoiceProcessService.processInvoices(customUserDetails, files);
+        return ResponseEntity.ok(new RestResponse<>(result));
+    }
 
-        CompletableFuture.runAsync(() -> {
-            List<OcrValidationRequest> validResults = results.stream()
-                    .filter(result -> result != null)
-                    .toList();
-            log.info("validResults: {}", validResults);
-            ocrEventPublisher.publish(validResults);
-        });
+    @PostMapping("/sync")
+    public ResponseEntity<RestResponse<Boolean>> uploadMultipleFilesSync(
+            @AuthenticationPrincipal CustomUserDetails customUserDetails,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files) {
 
-
-        return ResponseEntity.ok(new RestResponse<>(true));
+        if (files == null) {
+            files = new ArrayList<>();
+        }
+        Boolean result = syncInvoiceProcessService.processInvoices(customUserDetails, files);
+        return ResponseEntity.ok(new RestResponse<>(result));
     }
 }
-
