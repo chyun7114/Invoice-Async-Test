@@ -6,4 +6,5 @@ dependencies {
     implementation 'org.hibernate.orm:hibernate-community-dialects:6.3.1.Final'
 //    runtimeOnly 'com.mysql:mysql-connector-j'
     implementation 'redis.clients:jedis:4.2.3'
+    runtimeOnly 'com.h2database:h2'
 }
