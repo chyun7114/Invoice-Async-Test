@@ -90,7 +90,7 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
 
         // Then
         await().atMost(15, TimeUnit.SECONDS)
-                .untilAsserted(() -> verify(taxReceiptValidationService, atLeastOnce()).listen(any()));
+                .untilAsserted(() -> verify(taxReceiptValidationService, atLeastOnce()).listen(any(), any(), any(), any(), any()));
     }
 
     @Test
@@ -111,7 +111,7 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
 
         // Then
         await().atMost(15, TimeUnit.SECONDS)
-                .untilAsserted(() -> verify(taxReceiptValidationService, atLeastOnce()).listen(any()));
+                .untilAsserted(() -> verify(taxReceiptValidationService, atLeastOnce()).listen(any(), any(), any(), any(), any()));
 
     }
 
@@ -127,7 +127,7 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
 
         // Then
         await().atMost(15, TimeUnit.SECONDS)
-                .untilAsserted(() -> verify(taxReceiptValidationService, atLeastOnce()).listen(any()));
+                .untilAsserted(() -> verify(taxReceiptValidationService, atLeastOnce()).listen(any(), any(), any(), any(), any()));
     }
 
     @Test
@@ -138,7 +138,7 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
         List<OcrValidationRequest> emptyEvents = List.of();
 
         // When
-        taxReceiptValidationService.listen(emptyEvents);
+        taxReceiptValidationService.listen(emptyEvents, null, null, null, null);
     }
 
 
@@ -147,7 +147,7 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
     @DisplayName("null 이벤트가 수신되면 처리하지 않고 즉시 리턴한다")
     void testNullEventIgnored() {
         // When & Then
-        taxReceiptValidationService.listen(null);
+        taxReceiptValidationService.listen(null, null, null, null, null);
     }
 
     private List<OcrValidationRequest> createMockEvents(int count) {
