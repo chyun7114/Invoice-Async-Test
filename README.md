@@ -10,12 +10,12 @@
 
 ## 2. 엔드포인트
 
-- `POST /v1/invoice`
+- `POST /v2/invoice/async`
   - 비동기 경로
   - 파일 이벤트 생성 후 Kafka 발행
   - 즉시 응답(`Boolean`)
 
-- `POST /v1/invoice/sync`
+- `POST /v2/invoice/sync`
   - 동기 경로
   - 요청 스레드에서 OCR -> 검증 -> DB 저장까지 완료 후 응답
 

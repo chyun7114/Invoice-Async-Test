@@ -19,7 +19,7 @@ import java.util.List;
 
 @RestController
 @Log4j2
-@RequestMapping("/v1/invoice")
+@RequestMapping("/v2/invoice")
 public class InvoiceOcrController implements InvoiceOcrSwagger {
 
     private final InvoiceProcessUseCase asyncInvoiceProcessService;
@@ -32,7 +32,7 @@ public class InvoiceOcrController implements InvoiceOcrSwagger {
         this.syncInvoiceProcessService = syncInvoiceProcessService;
     }
 
-    @PostMapping
+    @PostMapping("/async")
     public ResponseEntity<RestResponse<Boolean>> uploadMultipleFiles(
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
             @RequestPart(value = "files", required = false) List<MultipartFile> files) {
