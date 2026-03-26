@@ -2,6 +2,7 @@ package com.seoulmilk.invoice;
 
 import com.seoulmilk.config.IntegrationTestConfig;
 import com.seoulmilk.invoice.application.MockOcrExtractionService;
+import com.seoulmilk.invoice.application.OcrEventPublisher;
 import com.seoulmilk.receipt.application.TaxReceiptValidationService;
 import com.seoulmilk.receipt.dto.request.OcrValidationRequest;
 import org.junit.jupiter.api.AfterAll;
@@ -28,12 +29,15 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 @EmbeddedKafka(
@@ -59,6 +63,9 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
 
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
+
+    @Autowired
+    private OcrEventPublisher ocrEventPublisher;
 
     @SpyBean
     private TaxReceiptValidationService taxReceiptValidationService;
@@ -135,6 +142,55 @@ class KafkaPipelineIntegrationTest extends IntegrationTestConfig {
     @DisplayName("null 이벤트는 즉시 리턴한다")
     void testNullEventIgnored() {
         taxReceiptValidationService.listen(null, null, null, null, null);
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("Redis 멱등성: 동일 영수증을 두 번 발행해도 Consumer는 한 번만 처리한다")
+    void testRedisIdempotencyOnDuplicatePublish() {
+        String fileUrl = "mock://invoice/idempotency/" + UUID.randomUUID() + "/receipt.png";
+        List<OcrValidationRequest> events = List.of(createMockEvent(1L, fileUrl));
+        String dedupKey = "idempotency:kafka:receipt:1:" + fileUrl;
+
+        redisTemplate.delete(dedupKey);
+        reset(taxReceiptValidationService);
+
+        ocrEventPublisher.publish(events);
+
+        await().atMost(20, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(taxReceiptValidationService, times(1))
+                        .listen(any(), any(), any(), any(), any()));
+
+        ocrEventPublisher.publish(events);
+
+        verify(taxReceiptValidationService, after(4000).times(1))
+                .listen(any(), any(), any(), any(), any());
+
+        assertThat(redisTemplate.hasKey(dedupKey)).isTrue();
+    }
+
+    @Test
+    @Order(7)
+    @DisplayName("Redis 멱등성: 한 배치에 동일 영수증이 중복 포함돼도 한 건만 발행된다")
+    void testRedisIdempotencyWithinSingleBatch() {
+        String fileUrl = "mock://invoice/idempotency-batch/" + UUID.randomUUID() + "/receipt.png";
+        OcrValidationRequest duplicate = createMockEvent(1L, fileUrl);
+        List<OcrValidationRequest> duplicatedEvents = List.of(duplicate, duplicate);
+        String dedupKey = "idempotency:kafka:receipt:1:" + fileUrl;
+
+        redisTemplate.delete(dedupKey);
+        reset(taxReceiptValidationService);
+
+        ocrEventPublisher.publish(duplicatedEvents);
+
+        await().atMost(20, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(taxReceiptValidationService, times(1))
+                        .listen(any(), any(), any(), any(), any()));
+
+        verify(taxReceiptValidationService, after(4000).times(1))
+                .listen(any(), any(), any(), any(), any());
+
+        assertThat(redisTemplate.hasKey(dedupKey)).isTrue();
     }
 
     private List<OcrValidationRequest> createMockEvents(int count) {

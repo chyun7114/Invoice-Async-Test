@@ -6,9 +6,15 @@ import com.seoulmilk.invoice.domain.value.FileMetaData;
 import com.seoulmilk.invoice.infrastructure.properties.InvoiceMockProperties;
 import com.seoulmilk.receipt.dto.request.OcrValidationRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -17,6 +23,7 @@ import java.util.stream.IntStream;
 
 @Component
 @RequiredArgsConstructor
+@Log4j2
 public class InvoiceRequestAssembler {
     private final InvoiceMockProperties invoiceMockProperties;
 
@@ -68,6 +75,32 @@ public class InvoiceRequestAssembler {
 
     private String createQueueFileUrl(MultipartFile file) {
         String originalFilename = Objects.toString(file.getOriginalFilename(), "unknown");
-        return "mock://invoice/" + UUID.randomUUID() + "/" + originalFilename;
+        String fingerprint = createFileFingerprint(file);
+        return "mock://invoice/" + fingerprint + "/" + originalFilename;
+    }
+
+    private String createFileFingerprint(MultipartFile file) {
+        try (InputStream inputStream = file.getInputStream()) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = inputStream.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+            return toHex(digest.digest());
+        } catch (IOException | NoSuchAlgorithmException e) {
+            log.warn("[Assembler] 파일 해시 생성 실패. 파일 메타데이터 기반 fingerprint로 대체합니다. filename={}",
+                    file.getOriginalFilename(), e);
+            String fallbackSource = Objects.toString(file.getOriginalFilename(), "unknown") + ":" + file.getSize();
+            return UUID.nameUUIDFromBytes(fallbackSource.getBytes(StandardCharsets.UTF_8)).toString();
+        }
+    }
+
+    private String toHex(byte[] bytes) {
+        StringBuilder builder = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            builder.append(String.format("%02x", b));
+        }
+        return builder.toString();
     }
 }
