@@ -19,4 +19,20 @@ public class KafkaTopicConfiguration {
                 .replicas(kafkaProperties.getReplicaCount())
                 .build();
     }
+
+    @Bean
+    public NewTopic ocrRetryTopic() {
+        return TopicBuilder.name(kafkaProperties.getRetryTopic())
+                .partitions(kafkaProperties.getPartitionCount())
+                .replicas(kafkaProperties.getReplicaCount())
+                .build();
+    }
+
+    @Bean
+    public NewTopic ocrDlqTopic() {
+        return TopicBuilder.name(kafkaProperties.getDlqTopic())
+                .partitions(kafkaProperties.getPartitionCount())
+                .replicas(kafkaProperties.getReplicaCount())
+                .build();
+    }
 }

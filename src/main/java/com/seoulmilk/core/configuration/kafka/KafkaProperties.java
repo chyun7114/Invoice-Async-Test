@@ -9,6 +9,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @RequiredArgsConstructor
 public class KafkaProperties {
     private final String topic;
+    private final String retryTopic;
+    private final String dlqTopic;
     private final String groupId;
     private final int partitionCount;
     private final int replicaCount;

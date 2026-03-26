@@ -21,7 +21,10 @@ public class InvoiceRequestAssembler {
     private final InvoiceMockProperties invoiceMockProperties;
 
     public Long resolveEmpPk(CustomUserDetails customUserDetails) {
-        return customUserDetails != null ? customUserDetails.getId() : 1L;
+        if (customUserDetails != null && customUserDetails.getId() != null) {
+            return customUserDetails.getId();
+        }
+        return invoiceMockProperties.getDefaultEmpPk();
     }
 
     public List<OcrValidationRequest> toQueueEvents(Long empPk, List<MultipartFile> files) {

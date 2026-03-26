@@ -12,4 +12,7 @@ public class InvoiceMockProperties {
     private int validationDelayMs = 1000;
     private int minAutoFileCount = 1;
     private int maxAutoFileCount = 50;
+    private double randomFailRate = 0.025;
+    private long defaultEmpPk = 1L;
+    private boolean allowMockEmpFallback = false;
 }
