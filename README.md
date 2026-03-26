@@ -1,103 +1,108 @@
-# Invoice Async Test - 로직 정리
+﻿# Invoice Async Test
 
-이 문서는 현재 브랜치 기준으로 `/v1/invoice` 성능 비교(동기/비동기, Kafka 유무)에 맞춰 반영된 **핵심 처리 로직**만 정리합니다.
+Kafka 기반 비동기 인보이스 처리 파이프라인 검증 프로젝트입니다.
 
-## 1. 목표 아키텍처
+## 개요
+현재 구현은 다음 항목을 중심으로 구성되어 있습니다.
+- 동기/비동기 처리 경로 분리
+- 파일 1건당 메시지 1건 발행
+- Redis 기반 Producer 멱등성(중복 발행 방지)
+- Retry + DLQ 기반 실패 처리
+- 파일/배치 단위 처리 상태 저장
 
-- API: 최소 검증 후 즉시 응답
-- 백그라운드: OCR -> 외부 검증 -> DB 저장
-- 성능 측정: API 응답시간과 백그라운드 완료시간 분리
+## 기술 스택
+- Java 21
+- Spring Boot 3.3.x
+- Spring Kafka
+- Redis
+- H2 (local/test)
+- Gradle
+- Embedded Kafka / Embedded Redis (테스트)
 
-## 2. 엔드포인트
+## API
+기준 컨트롤러: `InvoiceOcrController`
 
 - `POST /v2/invoice/async`
-  - 비동기 경로
-  - 파일 이벤트 생성 후 Kafka 발행
-  - 즉시 응답(`Boolean`)
+  - 파일 목록을 이벤트로 변환 후 Kafka 비동기 발행
+  - 즉시 `Boolean` 응답 반환
 
 - `POST /v2/invoice/sync`
-  - 동기 경로
-  - 요청 스레드에서 OCR -> 검증 -> DB 저장까지 완료 후 응답
+  - 요청 스레드에서 동기 처리
+  - 처리 완료 후 `Boolean` 응답 반환
 
-## 3. 비동기 처리 흐름
+## 처리 흐름
+### Async 경로
+1. `InvoiceRequestAssembler`
+   - 입력 파일을 `OcrValidationRequest`로 변환
+   - 파일 내용 해시(fingerprint) 기반 식별 URL 생성
+2. `KafkaOcrEventPublisher`
+   - 파일 1건당 메시지 1건 발행
+   - Redis `SET NX`로 동일 영수증 중복 발행 차단
+3. `TaxReceiptValidationService` (main consumer)
+   - OCR/검증 mock 처리
+   - 처리 상태 저장
+   - transient 실패 시 retry topic 발행
+   - 재시도 한도 초과 시 DLQ 발행
 
-### API 계층
+### Retry / DLQ
+- Retry consumer topic: `${kafka.retry-topic}`
+- DLQ producer topic: `${kafka.dlq-topic}`
+- 실패 유형 분류: `ReceiptProcessingFailureClassifier`
 
-1. `InvoiceRequestAssembler`에서 파일 최소 검증/이벤트 생성
-2. `KafkaOcrEventPublisher`에서 Kafka 발행
-3. 응답 반환
+## 주요 컴포넌트
+### Invoice
+- `InvoiceRequestAssembler`
+- `AsyncInvoiceProcessService`
+- `SyncInvoiceProcessService`
+- `KafkaOcrEventPublisher`
 
-### Kafka 발행 방식
+### Receipt
+- `TaxReceiptValidationService`
+- `ReceiptRetryDlqPublisher`
+- `ReceiptHistoryService`
+- `BatchSummaryService`
 
-- 기존: `List<OcrValidationRequest>`를 1개 메시지로 발행
-- 현재: **파일 1개당 메시지 1개**로 분할 발행
-- key: `batchId:index`
-- header:
-  - `x-produced-at`: 생산 시각(ms)
-  - `x-batch-id`: 배치 ID
-  - `x-batch-size`: 배치 총 건수
+## 설정
+주요 설정 키:
+- `kafka.topic`
+- `kafka.retry-topic`
+- `kafka.dlq-topic`
+- `kafka.group-id`
+- `invoice.mock.*`
+  - `ocr-delay-ms`
+  - `validation-delay-ms`
+  - `random-fail-rate`
+  - `allow-mock-emp-fallback`
 
-### Consumer 계층 (`TaxReceiptValidationService`)
+로컬 기본 설정 파일:
+- `src/main/resources/application-local.yml`
 
-1. 멱등 체크 (Redis, requestId 기반)
-2. OCR Mock (`MockOcrExtractionService`)
-3. 외부 검증 Mock (`MockExternalValidationService`)
-4. DB 저장 (`ValidReceiptRepository`)
-5. 파일 단위 처리 로그 출력
-6. Redis 카운터로 배치 완료 집계 후 배치 총 소요시간 로그 출력
+## 실행
+### 1) Infra + App (Docker Compose)
+```bash
+docker compose up --build
+```
 
-## 4. 동기 처리 흐름
+### 2) App only (local)
+```bash
+./gradlew bootRun --args='--spring.profiles.active=local'
+```
 
-`SyncInvoiceProcessService`에서 다음을 요청 스레드 내 순차 수행:
+## 테스트
+대표 통합 테스트:
+- `KafkaPipelineIntegrationTest`
+  - Producer -> Consumer 파이프라인
+  - Redis 멱등성(중복 발행 차단)
+  - Retry 라우팅
+- `TaxReceiptPipelineStatusIntegrationTest`
+  - SUCCESS / FAILED / REVIEW_REQUIRED / DLQ 상태 저장
+  - 배치 요약 집계 검증
 
-1. 이벤트 생성
-2. OCR Mock
-3. 외부 검증 Mock
-4. DB 저장
-5. 단계별 소요시간 로그 출력
+실행:
+```bash
+./gradlew test
+```
 
-## 5. 파일 미첨부 모드 (Mock 테스트용)
-
-- 파일을 보내지 않으면 자동으로 가짜 파일 이벤트를 생성
-- 기본 범위: `1~50건 랜덤`
-- 설정:
-  - `invoice.mock.min-auto-file-count`
-  - `invoice.mock.max-auto-file-count`
-
-## 6. 로그 해석 포인트
-
-### API 비동기 로그
-
-- `[Async] ... total=...ms`
-  - API가 이벤트 생성 + Kafka 디스패치까지 걸린 시간
-
-### Consumer 파일 단위 로그
-
-- `[Consumer] ... queueDelay=..., ocr=..., validation=..., save=..., endToEnd=..., saved=...`
-  - 단일 메시지(파일 단위) 처리 시간
-
-### Consumer 배치 단위 로그
-
-- `[Consumer-Batch] ... totalRecords=..., processed=..., saved=..., totalElapsed=...ms`
-  - 전체 파일(batch) 완료까지의 총 시간
-
-## 7. 현재 주의사항
-
-- `saved=0` 또는 `skip DB save: emp not found`가 나오면 `empPk`에 해당하는 사용자 데이터가 DB에 없는 상태입니다.
-- MinIO 로컬 충돌 이슈가 있었고, 로컬 프로필 endpoint는 `http://[::1]:9000` 기준으로 사용 중입니다.
-
-## 8. 주요 클래스
-
-- Controller
-  - `com.seoulmilk.invoice.presentation.InvoiceOcrController`
-- Async
-  - `com.seoulmilk.invoice.application.AsyncInvoiceProcessService`
-  - `com.seoulmilk.invoice.infrastructure.event.KafkaOcrEventPublisher`
-- Sync
-  - `com.seoulmilk.invoice.application.SyncInvoiceProcessService`
-- Consumer
-  - `com.seoulmilk.receipt.application.TaxReceiptValidationService`
-- Mock 단계 분리
-  - `com.seoulmilk.invoice.application.MockOcrExtractionService`
-  - `com.seoulmilk.invoice.application.MockExternalValidationService`
-
+## 참고
+- 이 문서는 현재 구현 기준 초안입니다.
+- 운영 설정/배포 절차/모니터링 내용은 이후 추가 예정입니다.
