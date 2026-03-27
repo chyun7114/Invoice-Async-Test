@@ -11,7 +11,7 @@ public class MockExternalValidationService {
     private final InvoiceMockProperties invoiceMockProperties;
 
     public OcrValidationRequest validate(OcrValidationRequest request) {
-        pause(invoiceMockProperties.getValidationDelayMs());
+        pause(invoiceMockProperties.nextValidationDelayMs());
 
         OcrValidationRequest.TaxValidationInfo info = request.taxValidationInfo();
         OcrValidationRequest.TaxValidationInfo validatedInfo = OcrValidationRequest.TaxValidationInfo.from(

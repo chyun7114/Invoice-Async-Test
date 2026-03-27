@@ -16,7 +16,7 @@ public class MockOcrExtractionService {
     private final InvoiceMockProperties invoiceMockProperties;
 
     public OcrValidationRequest extract(OcrValidationRequest request) {
-        pause(invoiceMockProperties.getOcrDelayMs());
+        pause(invoiceMockProperties.nextOcrDelayMs());
 
         long seed = Integer.toUnsignedLong(request.fileUrl().hashCode());
         int supplyValue = 10_000 + (int) (seed % 900_000);

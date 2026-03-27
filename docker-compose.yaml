@@ -1,7 +1,4 @@
-version: "3.8"
-
 services:
-  # 1. Zookeeper
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: zookeeper
@@ -13,7 +10,6 @@ services:
     networks:
       - app-network
 
-  # 2. Kafka
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     container_name: kafka
@@ -32,7 +28,6 @@ services:
     networks:
       - app-network
 
-  # 3. Redis
   redis:
     image: redis:7.2-alpine
     container_name: redis
@@ -43,13 +38,12 @@ services:
     networks:
       - app-network
 
-  # 4. MinIO
   minio:
     image: minio/minio
     container_name: minio
     ports:
-      - "9000:9000" # API 포트
-      - "9001:9001" # 원격 콘솔(UI) 포트
+      - "9000:9000"
+      - "9001:9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadminpassword
@@ -57,27 +51,78 @@ services:
     networks:
       - app-network
 
-  # 5. Spring Boot (여기서 직접 Dockerfile을 읽어 빌드 & 실행합니다)
-  spring-app:
-    container_name: spring-app
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-    environment:
-      - SPRING_PROFILES_ACTIVE=local
-      # application-local.yml 의 로컬 호스트 정보를 docker-compose 내부 통신용 이름으로 덮어씁니다.
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - SPRING_DATA_REDIS_HOST=redis
-      - MINIO_ENDPOINT=http://minio:9000
+#  spring-app:
+#    container_name: spring-app
+#    build:
+#      context: .
+#      dockerfile: Dockerfile
+#    ports:
+#      - "8080:8080"
+#    environment:
+#      - SPRING_PROFILES_ACTIVE=local
+#      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+#      - SPRING_DATA_REDIS_HOST=redis
+#      - MINIO_ENDPOINT=http://minio:9000
+#    depends_on:
+#      - kafka
+#      - redis
+#      - minio
+#    networks:
+#      - app-network
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    container_name: kafka-exporter
+    command:
+      - "--kafka.server=kafka:29092"
+      - "--web.listen-address=:9308"
+      - "--log.level=info"
     depends_on:
       - kafka
-      - redis
-      - minio
+    ports:
+      - "9308:9308"
+    networks:
+      - app-network
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-remote-write-receiver"
+      - "--storage.tsdb.retention.time=7d"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - kafka-exporter
+    ports:
+      - "9090:9090"
+    networks:
+      - app-network
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
     networks:
       - app-network
 
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

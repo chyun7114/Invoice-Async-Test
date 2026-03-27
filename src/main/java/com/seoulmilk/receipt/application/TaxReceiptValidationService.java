@@ -11,6 +11,7 @@ import com.seoulmilk.receipt.application.support.BatchSummaryService;
 import com.seoulmilk.receipt.application.support.ReceiptHistoryService;
 import com.seoulmilk.receipt.application.support.ReceiptRetryDlqPublisher;
 import com.seoulmilk.receipt.domain.ValidReceiptRepository;
+import com.seoulmilk.receipt.domain.entity.InvoiceFileProcessHistory;
 import com.seoulmilk.receipt.domain.value.FileProcessStatus;
 import com.seoulmilk.receipt.domain.value.ProcessingFailureType;
 import com.seoulmilk.receipt.dto.request.OcrValidationRequest;
@@ -22,6 +23,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -51,7 +54,7 @@ public class TaxReceiptValidationService {
     private final ReceiptHistoryService historyService;
     private final BatchSummaryService batchSummaryService;
 
-    @KafkaListener(topics = "${kafka.topic}", groupId = "${kafka.group-id}", concurrency = "3")
+    @KafkaListener(topics = "${kafka.topic}", groupId = "${kafka.group-id}", concurrency = "${kafka.listener-concurrency:3}")
     public void listen(
             List<OcrValidationRequest> ocrValidationRequestList,
             @Header(value = KafkaHeaders.RECEIVED_KEY, required = false) String requestId,
@@ -62,7 +65,7 @@ public class TaxReceiptValidationService {
         processIncoming(ocrValidationRequestList, requestId, producedAtHeader, batchIdHeader, batchSizeHeader, 0, kafkaProperties.getTopic());
     }
 
-    @KafkaListener(topics = "${kafka.retry-topic}", groupId = "${kafka.group-id}", concurrency = "3")
+    @KafkaListener(topics = "${kafka.retry-topic}", groupId = "${kafka.group-id}", concurrency = "${kafka.listener-concurrency:3}")
     public void listenRetry(
             List<OcrValidationRequest> ocrValidationRequestList,
             @Header(value = KafkaHeaders.RECEIVED_KEY, required = false) String requestId,
@@ -98,7 +101,7 @@ public class TaxReceiptValidationService {
                 return;
             }
 
-            Optional<com.seoulmilk.receipt.domain.entity.InvoiceFileProcessHistory> existingHistory = historyService.findByRequestId(context.requestId());
+            Optional<InvoiceFileProcessHistory> existingHistory = historyService.findByRequestId(context.requestId());
             if (existingHistory.isPresent() && historyService.isTerminal(existingHistory.get().getStatus())) {
                 log.warn("[Consumer-Idempotency] terminal status already exists. requestId={}, batchId={}, status={}",
                         context.requestId(), existingHistory.get().getBatchId(), existingHistory.get().getStatus());
@@ -106,43 +109,102 @@ public class TaxReceiptValidationService {
             }
 
             long consumedAt = System.currentTimeMillis();
+            Long injectMs = null;
+            Long extractMs = null;
+            Long validateMs = null;
+            Long saveMs = null;
+            Long routeMs = null;
+            Long historyMs = null;
+            Long batchMs = null;
 
             try {
+                long t0 = System.currentTimeMillis();
                 maybeInjectRandomFailure();
-                OcrValidationRequest extractedRequest = mockOcrExtractionService.extract(context.request());
-                OcrValidationRequest validatedRequest = mockExternalValidationService.validate(extractedRequest);
-                saveValidatedReceipt(validatedRequest);
+                injectMs = System.currentTimeMillis() - t0;
 
+                // OCR 처리 지점: 영수증 이미지/데이터에서 OCR 추출을 수행
+                t0 = System.currentTimeMillis();
+                OcrValidationRequest extractedRequest = mockOcrExtractionService.extract(context.request());
+                extractMs = System.currentTimeMillis() - t0;
+
+                // 국세청(외부 검증) 처리 지점: OCR 결과를 기반으로 세금계산서 유효성 검증 수행
+                t0 = System.currentTimeMillis();
+                OcrValidationRequest validatedRequest = mockExternalValidationService.validate(extractedRequest);
+                validateMs = System.currentTimeMillis() - t0;
+
+                t0 = System.currentTimeMillis();
+                saveValidatedReceipt(validatedRequest);
+                saveMs = System.currentTimeMillis() - t0;
+
+                t0 = System.currentTimeMillis();
                 historyService.upsert(context.batchId(), context.requestId(), context.request().empPk(), context.request().fileUrl(),
                         FileProcessStatus.SUCCESS, null, null, retryCount);
+                historyMs = System.currentTimeMillis() - t0;
+
+                t0 = System.currentTimeMillis();
                 batchSummaryService.update(context.batchId(), context.batchSize(), context.producedAt(), FileProcessStatus.SUCCESS);
+                batchMs = System.currentTimeMillis() - t0;
+
                 logHandled(context.sourceTopic(), context.requestId(), context.batchId(), FileProcessStatus.SUCCESS, null, retryCount, consumedAt, context.producedAt(), null);
+                logStepBreakdown(context.sourceTopic(), context.requestId(), context.batchId(), FileProcessStatus.SUCCESS, retryCount,
+                        consumedAt, injectMs, extractMs, validateMs, saveMs, routeMs, historyMs, batchMs);
             } catch (Exception ex) {
+                long t0 = System.currentTimeMillis();
                 ProcessingFailureType failureType = failureClassifier.classify(ex);
+                routeMs = System.currentTimeMillis() - t0;
+
                 if (failureType == ProcessingFailureType.TRANSIENT) {
                     if (retryCount < MAX_TRANSIENT_RETRY) {
+                        t0 = System.currentTimeMillis();
                         retryDlqPublisher.publishRetry(context.request(), context.requestId(), context.batchId(), context.batchSize(), context.producedAt(), retryCount + 1);
+                        routeMs += (System.currentTimeMillis() - t0);
+
+                        t0 = System.currentTimeMillis();
                         historyService.upsert(context.batchId(), context.requestId(), context.request().empPk(), context.request().fileUrl(),
                                 FileProcessStatus.RETRYING, failureType, normalizeReason(ex), retryCount + 1);
+                        historyMs = System.currentTimeMillis() - t0;
+
                         logHandled(context.sourceTopic(), context.requestId(), context.batchId(), FileProcessStatus.RETRYING, failureType, retryCount + 1, consumedAt, context.producedAt(), ex);
+                        logStepBreakdown(context.sourceTopic(), context.requestId(), context.batchId(), FileProcessStatus.RETRYING, retryCount + 1,
+                                consumedAt, injectMs, extractMs, validateMs, saveMs, routeMs, historyMs, batchMs);
                         return;
                     }
 
+                    t0 = System.currentTimeMillis();
                     retryDlqPublisher.publishDlq(context.request(), context.requestId(), context.batchId(), context.batchSize(), context.producedAt(), retryCount);
+                    routeMs += (System.currentTimeMillis() - t0);
+
+                    t0 = System.currentTimeMillis();
                     historyService.upsert(context.batchId(), context.requestId(), context.request().empPk(), context.request().fileUrl(),
                             FileProcessStatus.DLQ, failureType, normalizeReason(ex), retryCount);
+                    historyMs = System.currentTimeMillis() - t0;
+
+                    t0 = System.currentTimeMillis();
                     batchSummaryService.update(context.batchId(), context.batchSize(), context.producedAt(), FileProcessStatus.DLQ);
+                    batchMs = System.currentTimeMillis() - t0;
+
                     logHandled(context.sourceTopic(), context.requestId(), context.batchId(), FileProcessStatus.DLQ, failureType, retryCount, consumedAt, context.producedAt(), ex);
+                    logStepBreakdown(context.sourceTopic(), context.requestId(), context.batchId(), FileProcessStatus.DLQ, retryCount,
+                            consumedAt, injectMs, extractMs, validateMs, saveMs, routeMs, historyMs, batchMs);
                     return;
                 }
 
                 FileProcessStatus status = failureType == ProcessingFailureType.REVIEW_REQUIRED
                         ? FileProcessStatus.REVIEW_REQUIRED
                         : FileProcessStatus.FAILED;
+
+                t0 = System.currentTimeMillis();
                 historyService.upsert(context.batchId(), context.requestId(), context.request().empPk(), context.request().fileUrl(),
                         status, failureType, normalizeReason(ex), retryCount);
+                historyMs = System.currentTimeMillis() - t0;
+
+                t0 = System.currentTimeMillis();
                 batchSummaryService.update(context.batchId(), context.batchSize(), context.producedAt(), status);
+                batchMs = System.currentTimeMillis() - t0;
+
                 logHandled(context.sourceTopic(), context.requestId(), context.batchId(), status, failureType, retryCount, consumedAt, context.producedAt(), ex);
+                logStepBreakdown(context.sourceTopic(), context.requestId(), context.batchId(), status, retryCount,
+                        consumedAt, injectMs, extractMs, validateMs, saveMs, routeMs, historyMs, batchMs);
             }
         } catch (Exception ex) {
             log.error("[Consumer-Unhandled] sourceTopic={}, requestId={}, retryCount={}, reason={}",
@@ -212,6 +274,38 @@ public class TaxReceiptValidationService {
                 normalizeReason(ex));
     }
 
+    private void logStepBreakdown(
+            String sourceTopic,
+            String requestId,
+            String batchId,
+            FileProcessStatus status,
+            int retryCount,
+            long consumedAt,
+            Long injectMs,
+            Long extractMs,
+            Long validateMs,
+            Long saveMs,
+            Long routeMs,
+            Long historyMs,
+            Long batchMs
+    ) {
+        long processingMs = System.currentTimeMillis() - consumedAt;
+        log.info("[Consumer-Step] sourceTopic={}, requestId={}, batchId={}, status={}, retryCount={}, inject={}ms, extract={}ms, validate={}ms, save={}ms, route={}ms, history={}ms, batch={}ms, processing={}ms",
+                sourceTopic,
+                requestId,
+                batchId,
+                status,
+                retryCount,
+                injectMs == null ? "N/A" : injectMs,
+                extractMs == null ? "N/A" : extractMs,
+                validateMs == null ? "N/A" : validateMs,
+                saveMs == null ? "N/A" : saveMs,
+                routeMs == null ? "N/A" : routeMs,
+                historyMs == null ? "N/A" : historyMs,
+                batchMs == null ? "N/A" : batchMs,
+                processingMs);
+    }
+
     private Long parseProducedAt(byte[] producedAtHeader) {
         if (producedAtHeader == null || producedAtHeader.length == 0) {
             return null;
@@ -251,12 +345,34 @@ public class TaxReceiptValidationService {
         }
 
         double sample = ThreadLocalRandom.current().nextDouble();
-        if (sample < failRate / 2) {
-            throw new RuntimeException(new java.net.SocketTimeoutException("simulated transient timeout"));
+        if (sample >= failRate) {
+            return;
         }
-        if (sample < failRate) {
-            throw new ReviewRequiredException("simulated unstable OCR result requires manual review");
+
+        double transientRatio = invoiceMockProperties.normalizedTransientFailRatio();
+        double reviewRatio = invoiceMockProperties.normalizedReviewRequiredFailRatio();
+        double failureTypeSample = ThreadLocalRandom.current().nextDouble();
+
+        if (failureTypeSample < transientRatio) {
+            throw randomTransientException();
         }
+
+        if (failureTypeSample < transientRatio + reviewRatio) {
+            throw new ReviewRequiredException("simulated OCR low-confidence result requires manual review");
+        }
+
+        throw new IllegalArgumentException("simulated invalid tax invoice payload");
+    }
+
+    private RuntimeException randomTransientException() {
+        int scenario = ThreadLocalRandom.current().nextInt(3);
+        if (scenario == 0) {
+            return new RuntimeException(new java.net.SocketTimeoutException("simulated OCR gateway timeout"));
+        }
+        if (scenario == 1) {
+            return new RuntimeException(new ConnectException("simulated NTS endpoint connection reset"));
+        }
+        return new RuntimeException(new IOException("simulated temporary upstream IO failure"));
     }
 
     private String normalizeReason(Throwable ex) {

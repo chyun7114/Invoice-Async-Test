@@ -69,9 +69,11 @@ Kafka 기반 비동기 인보이스 처리 파이프라인 검증 프로젝트�
 - `kafka.dlq-topic`
 - `kafka.group-id`
 - `invoice.mock.*`
-  - `ocr-delay-ms`
-  - `validation-delay-ms`
-  - `random-fail-rate`
+  - `ocr-delay-min-ms`, `ocr-delay-max-ms`
+  - `validation-delay-min-ms`, `validation-delay-max-ms`
+  - `default-auto-file-count` (파일 미전달 시 생성 개수)
+  - `random-fail-rate` (랜덤 실패 주입 비율)
+  - `transient-fail-ratio`, `review-required-fail-ratio`, `business-fail-ratio`
   - `allow-mock-emp-fallback`
 
 로컬 기본 설정 파일:
@@ -81,6 +83,37 @@ Kafka 기반 비동기 인보이스 처리 파이프라인 검증 프로젝트�
 ### 1) Infra + App (Docker Compose)
 ```bash
 docker compose up --build
+```
+
+### 1-1) Monitoring endpoints
+- Grafana: `http://localhost:3000` (`admin` / `admin`)
+- Prometheus: `http://localhost:9090`
+- Kafka Exporter metrics: `http://localhost:9308/metrics`
+
+기본 Grafana 대시보드:
+- `K6 + Kafka Async Overview`
+- 상세 사용 가이드: `monitoring/DASHBOARD_USAGE.md`
+- k6 프로필 상세: `k6/README.md`
+
+`k6`를 Prometheus에 적재하려면:
+```bash
+k6 run -e BASE_URL=http://localhost:8080 -e MODE=async -e PROFILE=user -e "K6_PROMETHEUS_RW_TREND_STATS=avg,p(95),p(99)" -o experimental-prometheus-rw=http://localhost:9090/api/v1/write k6/invoice-v2-sync-async.js
+```
+
+프로필 기준:
+- `user` (Closed): `VUS=2`, `THINK_TIME_SEC=1`, `FILES_PER_REQUEST=3`, `DURATION=1m`
+- `compare` (Arrival): `RATE=3->5->8 req/s`, `FILES_PER_REQUEST=5`, `DURATION=1m`
+- `peak` (Stress): `VUS=15`, `THINK_TIME_SEC=0.3`, `FILES_PER_REQUEST=5`, `DURATION=1m`
+
+`compare`(Arrival) 단계 실행:
+```bash
+k6 run -e BASE_URL=http://localhost:8080 -e MODE=async -e PROFILE=compare -e RATE=3 -e PRE_ALLOCATED_VUS=10 -e MAX_VUS=50 -e "K6_PROMETHEUS_RW_TREND_STATS=avg,p(95),p(99)" -o experimental-prometheus-rw=http://localhost:9090/api/v1/write k6/invoice-v2-sync-async.js
+```
+```bash
+k6 run -e BASE_URL=http://localhost:8080 -e MODE=async -e PROFILE=compare -e RATE=5 -e PRE_ALLOCATED_VUS=15 -e MAX_VUS=80 -e "K6_PROMETHEUS_RW_TREND_STATS=avg,p(95),p(99)" -o experimental-prometheus-rw=http://localhost:9090/api/v1/write k6/invoice-v2-sync-async.js
+```
+```bash
+k6 run -e BASE_URL=http://localhost:8080 -e MODE=async -e PROFILE=compare -e RATE=8 -e PRE_ALLOCATED_VUS=20 -e MAX_VUS=120 -e "K6_PROMETHEUS_RW_TREND_STATS=avg,p(95),p(99)" -o experimental-prometheus-rw=http://localhost:9090/api/v1/write k6/invoice-v2-sync-async.js
 ```
 
 ### 2) App only (local)
